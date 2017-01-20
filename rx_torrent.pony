@@ -3,6 +3,8 @@ use "itertools"
 use "json"
 use "files"
 use "debug"
+use "promises"
+use "collections"
 use "pony_bencode"
 
 actor Main
@@ -19,9 +21,55 @@ actor Main
       return
     end
 
-    Server(auth, Info(env), Handle(auth), logger
+    let keepers = TorrentRegistrar
+
+    Server(auth, Info(env), Handle(auth, keepers), logger
       where host="127.0.0.1", service=service, limit=limit, reversedns=auth
     )
+
+
+actor TorrentKeeper
+
+actor TorrentRegistrar
+  embed _registry: Map[String, TorrentKeeper tag] = _registry.create()
+
+  fun tag update(info_hash: String, value: TorrentKeeper): Promise[None] =>
+    let promise = Promise[None]
+    _add(info_hash, value, promise)
+    promise
+
+  fun tag remove(info_hash: String): Promise[None] =>
+    let promise = Promise[None]
+    _remove(info_hash, promise)
+    promise
+
+  fun tag apply(info_hash: String): Promise[TorrentKeeper] =>
+    let promise = Promise[TorrentKeeper]
+    _fetch(info_hash, promise)
+    promise
+
+  be _add(info_hash: String, torrent: TorrentKeeper, promise: Promise[None]) =>
+    if _registry.contains(info_hash) then
+      promise.reject()
+    else
+      _registry(info_hash) = torrent
+      promise(None)
+    end
+
+  be _remove(info_hash: String, promise: Promise[None]) =>
+    try
+      _registry.remove(info_hash)
+      promise(None)
+    else
+      promise.reject()
+    end
+
+  be _fetch(info_hash: String, promise: Promise[TorrentKeeper]) =>
+    try
+      promise(_registry(info_hash))
+    else
+      promise.reject()
+    end
 
 
 class Info
@@ -51,9 +99,11 @@ type StringTuple is (String, String)
 
 class Handle
   let _auth: AmbientAuth
+  let _keepers: TorrentRegistrar
 
-  new val create(auth: AmbientAuth) =>
+  new val create(auth: AmbientAuth, keepers: TorrentRegistrar) =>
     _auth = auth
+    _keepers = keepers
 
   fun val apply(request: Payload) =>
     let query = try
@@ -81,7 +131,7 @@ class Handle
     | (_, let path: String) =>
       try
         let caps: FileCaps val = recover
-          FileCaps.all().remove(FileCaps.add(FileCreate))
+          FileCaps.>all().>remove(FileCaps.add(FileCreate))
         end
         let json: JsonDoc val = BencodeDoc
           .>parse_file(FilePath(_auth, path, caps))
