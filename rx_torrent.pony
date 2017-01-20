@@ -106,42 +106,60 @@ class Handle
     _keepers = keepers
 
   fun val apply(request: Payload) =>
-    let query = try
-      URLEncode.decode(request.url.query)
-    else
-      ""
-    end
-    let torrentPath = try Iter[String](query.split("&").values())
-      .map[StringTuple]({
-        (entry: String): StringTuple =>
-          let entryArray = entry.split("=")
-          try
-            (entryArray(0), entryArray(1))
-          else
-            ("", "")
-          end
-      })
-      .find({(entry: StringTuple): Bool => entry._1 == "torrentPath"})
-    end
+    let path = request.url.path
+    let query = try _parse_query(request.url.query) end
 
-    var response = Payload.response()
-    response.update("Access-Control-Allow-Origin", "*")
-
-    match torrentPath
-    | (_, let path: String) =>
-      try
-        let caps: FileCaps val = recover
-          FileCaps.>all().>remove(FileCaps.add(FileCreate))
-        end
-        let json: JsonDoc val = BencodeDoc
-          .>parse_file(FilePath(_auth, path, caps))
-          .to_json()
-        response.add_chunk(json.string())
+    match query
+    | let query': Iter[StringTuple] =>
+      if path == "/add" then
+        _handle_add_torrent(consume request, query')
+      elseif path == "/remove" then
+        _handle_remove_torrent(consume request, query')
       else
-        response.add_chunk("{\"error\": \"bad torrent file\"}")
+        _handle_invalid_request(consume request)
       end
     else
-      response.add_chunk("{\"error\": \"bad query\"}")
+      _handle_invalid_request(consume request)
     end
 
-    (consume request).respond(consume response)
+    fun val _parse_query(query: String): Iter[StringTuple] ? =>
+      Iter[String](URLEncode.decode(query).split("&").values())
+        .map[StringTuple]({
+          (entry: String): StringTuple ? =>
+            let entryArray = entry.split("=")
+            (entryArray(0), entryArray(1))
+        })
+
+    fun val _handle_add_torrent(request: Payload, query: Iter[StringTuple]) =>
+
+      let torrent_path = try query.find(
+        {(entry: StringTuple): Bool => entry._1 == "torrentPath"})
+      end
+
+      var response = Payload.response()
+      //response.update("Access-Control-Allow-Origin", "*")
+
+      match torrent_path
+      | (_, let path: String) =>
+        try
+          let caps: FileCaps val = recover
+            FileCaps.>all().>remove(FileCaps.add(FileCreate))
+          end
+          let json: JsonDoc val = BencodeDoc
+            .>parse_file(FilePath(_auth, path, caps))
+            .to_json()
+          response.add_chunk(json.string())
+        else
+          response.add_chunk("{\"error\": \"bad torrent file\"}")
+        end
+      else
+        response.add_chunk("{\"error\": \"bad query\"}")
+      end
+
+      (consume request).respond(consume response)
+
+    fun val _handle_remove_torrent(request: Payload, query: Iter[StringTuple]) =>
+      None
+
+    fun val _handle_invalid_request(request: Payload) =>
+      None
